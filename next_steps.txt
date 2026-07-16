@@ -1,0 +1,17 @@
+  You already have all the code, but you have to execute these three steps in order once you plug in your Supabase URL:                                                                
+                                                                                                                                                                                       
+  ### 1. Build the Empty Tables                                                                                                                                                        
+                                                                                                                                                                                       
+  You must run python manage.py makemigrations and python manage.py migrate. This takes our models.py file and creates the actual empty tables inside Supabase.                        
+                                                                                                                                                                                       
+  ### 2. The Data Push                                                                                                                                                                 
+                                                                                                                                                                                       
+  You run python import_data.py. This blasts all 100,000 companies and their financials into the empty Supabase tables.                                                                
+                                                                                                                                                                                       
+  ### 3. The Search Engine Activation (The final step!)                                                                                                                                
+                                                                                                                                                                                       
+  Once all the data is inside Supabase, your search_vector column (the thing that makes the search bar insanely fast) will be empty!                                                   
+  We will write one final, tiny Python script that loops through the database, grabs the Company Name and City, and compiles them into the search_vector column so the PostgreSQL GIN  
+  Index activates.                                                                                                                                                                     
+                                                                                                                                                                                       
+  Once you run those 3 steps, your backend is officially 100% finished and we move exclusively to the Next.js Frontend!
