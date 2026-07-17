@@ -126,3 +126,26 @@ STATIC_URL = 'static/'
 
 # Allow Next.js frontend to communicate with Django API
 CORS_ALLOW_ALL_ORIGINS = True
+
+
+NINJA_EXTRA = {                                                                                                                                                                    
+    # 1. Tell Ninja which tracking classes to use                                                                                                                                  
+    'THROTTLE_CLASSES': [                                                                                                                                                          
+        'ninja_extra.throttling.AnonRateThrottle',                                                                                                                                 
+        'ninja_extra.throttling.UserRateThrottle'                                                                                                                                  
+    ],                                                                                                                                                                             
+                                                                                                                                                                                       
+    # 2. Set the global speed limits!                                                                                                                                              
+    'THROTTLE_RATES': {                                                                                                                                                            
+        'anon': '30/m',   # Anonymous IPs can only hit APIs 30 times a minute                                                                                                      
+        'user': '100/m',  # Logged-in users get a higher limit                                                                                                                     
+    }                                                                                                                                                                              
+}
+
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    }
+}

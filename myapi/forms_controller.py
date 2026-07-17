@@ -25,9 +25,9 @@ class FormsController:
     @route.post('/deletion', response=SuccessSchema)
     def submit_deletion(self, payload: DeletionInput):
         DeletionRequest.objects.create(**payload.dict())
-        return {"success": True, "message": "Your data deletion request was received."}
+        return {"success": True, "message": "Forespørselen din om sletting av data er mottatt."}
 
     @route.post('/contact', response=SuccessSchema)
     def submit_contact(self, payload: ContactInput):
         ContactMessage.objects.create(**payload.dict())
-        return {"success": True, "message": "Thanks for reaching out! We will contact you soon."}
+        return {"success": True, "message": "Takk for at du tar kontakt! Vi vil svare deg så snart som mulig."}

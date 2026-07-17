@@ -1,0 +1,65 @@
+================================================================================
+ASData API Endpoints - Easy Developer Guide
+================================================================================
+This file explains what each endpoint in the backend does. The API is built 
+using Django Ninja, and you can test all of these interactively by running the 
+server and visiting: http://127.0.0.1:8000/api/docs
+================================================================================
+
+1. LIVE SEARCH ENDPOINT
+-----------------------
+GET /api/search/?q={query}
+- What it does: This is the main search bar engine. You type in a company name, a keyword from their purpose, or a 9-digit organization number, and it instantly returns up to 20 matching companies.
+- How it works: It uses a PostgreSQL GIN index (Full-Text Search) tuned for the Norwegian language to find results blazingly fast.
+
+2. COMPANY PROFILE ENDPOINTS
+----------------------------
+GET /api/companies/{org_number}
+- What it does: Fetches the full profile for a single company.
+- What it returns: Everything we know about them—their address, financials, employee count, website, and an automatically generated "AI Summary" paragraph written in Norwegian.
+
+GET /api/companies/{org_number}/similar
+- What it does: Finds competitors or peers for a specific company.
+- How it works: It looks for up to 5 other companies in the exact same city and the exact same primary industry, sorting them by who has the most employees.
+
+3. HUB / CATEGORY ENDPOINTS
+---------------------------
+(These power the category browsing pages, like "See all companies in Oslo" or "See all IT companies")
+
+GET /api/hubs/municipalities/all
+- What it does: Returns a list of all municipalities (regions/cities) stored in the database.
+
+GET /api/hubs/industries/all
+- What it does: Returns a list of all industries (like "Plumbing", "Software", etc.) stored in the database.
+
+GET /api/hubs/municipality/{code}
+- What it does: Gets basic details about one specific municipality.
+
+GET /api/hubs/industry/{code}
+- What it does: Gets basic details about one specific industry.
+
+4. USER FORMS (POST)
+--------------------
+POST /api/forms/contact
+- What it does: Receives messages submitted through the "Contact Us" form on the website and saves them to the database.
+
+POST /api/forms/deletion
+- What it does: Receives requests from business owners who want their company removed from the ASData platform for privacy reasons.
+
+5. NEXT.JS STATIC SITE GENERATION (SSG)
+---------------------------------------
+GET /api/ssg/routes
+- What it does: This is a special endpoint exclusively for the Next.js frontend. When you "build" the Next.js app, Next.js calls this endpoint to get a massive list of every single URL route (like /company/983975240) so it can pre-render the HTML pages for maximum speed and SEO.
+
+6. SEO SITEMAPS (For Google)
+----------------------------
+(These generate standard XML sitemaps that you submit to Google Search Console so Google knows what pages exist on your site)
+
+GET /api/sitemap/index.xml
+- What it does: The master sitemap. It just contains links to the other sitemaps below.
+
+GET /api/sitemap/hubs.xml
+- What it does: A sitemap containing links to all the category/hub pages (industries and municipalities).
+
+GET /api/sitemap/companies_{page}.xml
+- What it does: Because you can't put 100,000 URLs in one sitemap easily, this generates "paginated" sitemaps. Page 1 might have the first 10,000 companies, Page 2 has the next 10,000, etc.
