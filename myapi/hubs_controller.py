@@ -3,6 +3,8 @@ from ninja import Schema
 from typing import List, Optional
 from .models import Company, Municipality, Industry
 
+from django.shortcuts import get_object_or_404
+
 class HubCompanySchema(Schema):
     organization_number: str
     name: str
@@ -36,12 +38,13 @@ class HubsController:
 
     @route.get('/municipality/{code}', response=List[HubCompanySchema])
     def get_municipality_hub(self, code: str):
-        """Returns the Top 100 companies in a specific city"""
-        qs = Company.objects.filter(locations__city__iexact=code).order_by('-employee_count')[:100]
+        """Returns the Top 100 companies in a specific city using Municipality Code"""
+        muni = get_object_or_404(Municipality, municipality_code=code)
+        qs = Company.objects.filter(business_city__iexact=muni.name).order_by('-employee_count')[:100]
         return list(qs)
 
     @route.get('/industry/{code}', response=List[HubCompanySchema])
     def get_industry_hub(self, code: str):
-        """Returns the Top 100 companies in a specific sector"""
-        qs = Company.objects.filter(industries__industry__code=code).order_by('-employee_count')[:100]
+        """Returns the Top 100 companies in a specific sector using Case-Insensitive Industry Code"""
+        qs = Company.objects.filter(industries__industry__code__iexact=code).order_by('-employee_count')[:100]
         return list(qs)
