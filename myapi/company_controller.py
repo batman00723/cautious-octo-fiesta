@@ -44,7 +44,7 @@ class CompanyDetailSchema(Schema):
     registered_date: Optional[str]
     employee_count: int
     website: Optional[str]
-    business_address: Optional[Dict[str, Any]]
+    business_address: Optional[Any]
     business_postal_code: Optional[str]
     business_city: Optional[str]
     business_country_code: Optional[str]

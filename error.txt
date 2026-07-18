@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "/opt/render/project/src/.venv/lib/python3.14/site-packages/ninja_extra/operation.py", line 224, in run
+    _processed_results = self._result_to_response(
+        request, result, ctx.response
+    )
+  File "/opt/render/project/src/.venv/lib/python3.14/site-packages/ninja/operation.py", line 422, in _result_to_response
+    validated_object = response_model.model_validate(
+        resp_object, context={"request": request, "response_status": status}
+    )
+  File "/opt/render/project/src/.venv/lib/python3.14/site-packages/pydantic/main.py", line 732, in model_validate
+    return cls.__pydantic_validator__.validate_python(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        obj,
+        ^^^^
+    ...<5 lines>...
+        by_name=by_name,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for NinjaResponseSchema
+response.business_address
+  Input should be a valid dictionary [type=dict_type, input_value=['Strandgata 21'], input_type=list]
+    For further information visit https://errors.pydantic.dev/2.13/v/dict_type
