@@ -11,19 +11,56 @@ class SimilarCompanySchema(Schema):
     business_city: Optional[str]
     employee_count: int
 
+# --- Nested Schemas for the Company Detail Page ---
+class FinancialSchema(Schema):
+    financial_year: int
+    operating_revenue: Optional[int]
+    operating_profit: Optional[int]
+    net_profit: Optional[int]
+    total_equity: Optional[int]
+    total_assets: Optional[int]
+
+class RoleSchema(Schema):
+    role_description: str
+    person_name: Optional[str]
+
+class IndustrySchema(Schema):
+    code: str
+    description: str
+    is_primary: bool
+
+class LocationSchema(Schema):
+    organization_number: str
+    name: str
+    city: Optional[str]
+    postal_code: Optional[str]
+    employee_count: int
+
 class CompanyDetailSchema(Schema):
     organization_number: str
     name: str
     organization_type: Optional[str]
     established_date: Optional[str]
+    registered_date: Optional[str]
     employee_count: int
     website: Optional[str]
-    business_address: Optional[List[str]]
+    business_address: Optional[Dict[str, Any]]
     business_postal_code: Optional[str]
     business_city: Optional[str]
     business_country_code: Optional[str]
     purpose: Optional[str]
     ai_summary: str
+    
+    # Trust & Warning Flags
+    is_vat_registered: bool
+    is_bankrupt: bool
+    is_under_liquidation: bool
+    
+    # Nested Arrays
+    financials: List[FinancialSchema]
+    roles: List[RoleSchema]
+    industries: List[IndustrySchema]
+    locations: List[LocationSchema]
 
 def generate_programmatic_summary(company: Company) -> str:
     """Zero-cost AI logic that injects DB facts into randomly selected templates (Norwegian)."""
@@ -45,22 +82,76 @@ def generate_programmatic_summary(company: Company) -> str:
         f"Med base i {city} er **{name}** en aktør i bransjen for {industry_name}. Selskapet er organisert som en {org_type}, ble stiftet i {year}, og har i dag {employees} ansatte. Selskapet rapporterte nylig {revenue} i driftsinntekter."
     ]
 
-    # Guarantees the same template is picked for the same company every time
     random.seed(company.organization_number) 
     return random.choice(templates)
+
 
 @api_controller('/companies', tags=['Company Details'])
 class CompanyController:
     
     @route.get('/{org_number}', response=CompanyDetailSchema)
     def get_company(self, org_number: str):
-        company = get_object_or_404(Company, organization_number=org_number)
+        # Optimized prefetch to grab absolutely everything in one fast SQL query
+        company = get_object_or_404(
+            Company.objects.prefetch_related(
+                'financials', 
+                'roles__person', 
+                'roles__holding_company', 
+                'roles__role_type',
+                'industries__industry',
+                'locations'
+            ), 
+            organization_number=org_number
+        )
+        
+        # 1. Map Industries
+        inds = [{"code": i.industry.code, "description": i.industry.description, "is_primary": i.is_primary} for i in company.industries.all()]
+            
+        # 2. Map Financials (Sort by newest year first)
+        fins = []
+        for fin in sorted(company.financials.all(), key=lambda x: x.financial_year, reverse=True):
+            fins.append({
+                "financial_year": fin.financial_year,
+                "operating_revenue": fin.operating_revenue,
+                "operating_profit": fin.operating_profit,
+                "net_profit": fin.net_profit,
+                "total_equity": fin.total_equity,
+                "total_assets": fin.total_assets
+            })
+            
+        # 3. Map Roles (Board of Directors, CEO, etc.)
+        roles = []
+        for r in company.roles.filter(is_active=True):
+            person_name = None
+            if r.person:
+                parts = filter(None, [r.person.first_name, r.person.middle_name, r.person.last_name])
+                person_name = " ".join(parts)
+            elif r.holding_company:
+                person_name = r.holding_company.name
+                
+            roles.append({
+                "role_description": r.role_type.description if r.role_type else "Ukjent rolle",
+                "person_name": person_name
+            })
+            
+        # 4. Map Branch Locations
+        locs = []
+        for loc in company.locations.all():
+            locs.append({
+                "organization_number": loc.organization_number,
+                "name": loc.name,
+                "city": loc.city,
+                "postal_code": loc.postal_code,
+                "employee_count": loc.employee_count
+            })
         
         return {
+            # Base info
             "organization_number": company.organization_number,
             "name": company.name,
             "organization_type": company.organization_type.description if company.organization_type else None,
             "established_date": str(company.established_date) if company.established_date else None,
+            "registered_date": str(company.registered_date) if company.registered_date else None,
             "employee_count": company.employee_count,
             "website": company.website,
             "business_address": company.business_address,
@@ -68,17 +159,25 @@ class CompanyController:
             "business_city": company.business_city,
             "business_country_code": company.business_country_code,
             "purpose": company.purpose,
-            "ai_summary": generate_programmatic_summary(company)
+            "ai_summary": generate_programmatic_summary(company),
+            
+            # Trust & Warnings
+            "is_vat_registered": company.is_vat_registered,
+            "is_bankrupt": company.is_bankrupt,
+            "is_under_liquidation": company.is_under_liquidation,
+            
+            # Arrays
+            "financials": fins,
+            "roles": roles,
+            "industries": inds,
+            "locations": locs
         }
 
     @route.get('/{org_number}/similar', response=List[SimilarCompanySchema])
     def get_similar_companies(self, org_number: str):
         company = get_object_or_404(Company, organization_number=org_number)
         
-        # Step 1: Base Query (Exclude the current company so it doesn't recommend itself)
         qs = Company.objects.exclude(organization_number=org_number)
-        
-        # Step 2: Try to find peers in the Exact Same City AND Same Primary Industry
         primary_ind = company.industries.filter(is_primary=True).first()
         
         if company.business_city:
@@ -87,11 +186,8 @@ class CompanyController:
         if primary_ind:
             qs = qs.filter(industries__industry=primary_ind.industry)
             
-        # Grab the 5 biggest peers by employee count
         similar = list(qs.order_by('-employee_count')[:5])
         
-        # Step 3: Fallback. If they are in a tiny town and we didn't find 5 peers, 
-        # let's just find 5 companies in the same industry from ANY city to fill the list.
         if len(similar) < 5 and primary_ind:
             fallback_qs = Company.objects.exclude(organization_number=org_number).filter(
                 industries__industry=primary_ind.industry
