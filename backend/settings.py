@@ -91,7 +91,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
         default=settings.db_url.get_secret_value(),
-        conn_max_age=600,
+        conn_max_age=60,
         ssl_require=True
     )
 }
