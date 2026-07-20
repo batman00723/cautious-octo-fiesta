@@ -22,7 +22,7 @@ if db_url.startswith("postgres://"):
 engine = create_engine(db_url)
 
 # The path to your Data Engineering folder
-DATA_DIR = 'E:/Alura/ASData/Data Exploraton'
+DATA_DIR = 'E:/Alura/ASData/Production_Pipeline'
 
 def import_table(csv_name, table_name, columns=None, transform_func=None):
     print(f"Loading {csv_name} into {table_name}...")
@@ -55,10 +55,10 @@ def import_table(csv_name, table_name, columns=None, transform_func=None):
 print("\n🚀 STARTING MASSIVE DATA IMPORT TO SUPABASE...\n")
 
 # STEP 1: Dictionaries (No Foreign Key dependencies)
-import_table('industries.csv', 'industries')
-import_table('municipalities.csv', 'municipalities')
-import_table('organization_types.csv', 'organization_types')
-import_table('role_types.csv', 'role_types')
+import_table('industries_all.csv', 'industries')
+import_table('municipalities_all.csv', 'municipalities')
+import_table('organization_types_all.csv', 'organization_types')
+import_table('role_types_all.csv', 'role_types')
 
 # STEP 2: Core Companies Table
 # We explicitly list ONLY the columns that belong in the companies table, stripping out the rest.
@@ -94,7 +94,7 @@ def transform_companies(df):
             
     return df
 
-import_table('golden_100k_transformed.csv', 'companies', columns=company_cols, transform_func=transform_companies)
+import_table('all_companies_transformed.csv', 'companies', columns=company_cols, transform_func=transform_companies)
 
 # STEP 3: Child Data (Must be done after Companies)
 def transform_locations(df):
@@ -107,7 +107,7 @@ def transform_locations(df):
             df[col] = df[col].apply(lambda x: json.dumps([x]) if pd.notna(x) and str(x).strip() else None)
     return df
 
-import_table('company_locations.csv', 'company_locations', transform_func=transform_locations)
+import_table('company_locations_all.csv', 'company_locations', transform_func=transform_locations)
 
 # We must strip out the 'NO_DATA' marker rows we used for the scraper's auto-resume feature
 def clean_financials(df):
@@ -133,7 +133,7 @@ def clean_financials(df):
             
     return df
 
-import_table('financial_statements.csv', 'financial_statements', transform_func=clean_financials)
+import_table('financial_statements_all.csv', 'financial_statements', transform_func=clean_financials)
 
 # STEP 4: People and Roles
 def transform_people(df):
@@ -145,7 +145,7 @@ def transform_people(df):
         df['is_deceased'] = df['is_deceased'].map({'True': True, 'False': False, 'true': True, 'false': False, True: True, False: False}).fillna(False)
     return df
 
-import_table('people.csv', 'people', transform_func=transform_people)
+import_table('people_all.csv', 'people', transform_func=transform_people)
 
 # Fetch valid IDs for foreign key validation
 try:
@@ -157,6 +157,9 @@ except Exception:
     VALID_COMPANY_IDS = set()
 
 def transform_roles(df):
+    if 'organization_number' in df.columns:
+        df = df.rename(columns={'organization_number': 'company_id'})
+        
     if 'id' in df.columns:
         df = df.drop_duplicates(subset=['id'])
     for col in ['person_id', 'holding_company_id']:
@@ -177,7 +180,7 @@ def transform_roles(df):
         df['is_active'] = df['is_active'].map({'True': True, 'False': False, 'true': True, 'false': False, True: True, False: False}).fillna(True)
     return df
 
-import_table('company_roles.csv', 'company_roles', transform_func=transform_roles)
+import_table('company_roles_all.csv', 'company_roles', transform_func=transform_roles)
 
 # STEP 5: Junction Tables
 def rename_org_to_company(df):
@@ -197,6 +200,6 @@ def transform_company_industries(df):
         df = df.drop_duplicates(subset=['company_id', 'industry_id'])
     return df
 
-import_table('company_industries.csv', 'company_industries', transform_func=transform_company_industries)
+import_table('company_industries_all.csv', 'company_industries', transform_func=transform_company_industries)
 
 print("\n CONGO KING! I have pushed all the .csv to DB just like she did to you from her life.")
