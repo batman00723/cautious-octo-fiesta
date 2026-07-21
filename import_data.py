@@ -29,7 +29,7 @@ def import_table(csv_name, table_name, columns=None, transform_func=None):
     with engine.connect() as conn:
         count = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
         if count > 0:
-            print(f"⚠️ {table_name} already has {count} rows. Skipping import to prevent duplicates.")
+            print(f"[WARNING] {table_name} already has {count} rows. Skipping import to prevent duplicates.")
             return
 
     file_path = os.path.join(DATA_DIR, csv_name)
@@ -49,10 +49,10 @@ def import_table(csv_name, table_name, columns=None, transform_func=None):
         
     # Insert data using default Pandas executemany (safer for Supabase parameter limits)
     df.to_sql(table_name, engine, if_exists='append', index=False, chunksize=500)
-    print(f"✅ {csv_name} imported successfully ({len(df)} rows).")
+    print(f"[SUCCESS] {csv_name} imported successfully ({len(df)} rows).")
 
 
-print("\n🚀 STARTING MASSIVE DATA IMPORT TO SUPABASE...\n")
+print("\n[START] STARTING MASSIVE DATA IMPORT TO SUPABASE...\n")
 
 # STEP 1: Dictionaries (No Foreign Key dependencies)
 import_table('industries_all.csv', 'industries')
@@ -152,9 +152,11 @@ try:
     with engine.connect() as conn:
         VALID_PERSON_IDS = set(row[0] for row in conn.execute(text("SELECT id FROM people")).fetchall())
         VALID_COMPANY_IDS = set(row[0] for row in conn.execute(text("SELECT organization_number FROM companies")).fetchall())
+        VALID_INDUSTRY_IDS = set(row[0] for row in conn.execute(text("SELECT code FROM industries")).fetchall())
 except Exception:
     VALID_PERSON_IDS = set()
     VALID_COMPANY_IDS = set()
+    VALID_INDUSTRY_IDS = set()
 
 def transform_roles(df):
     if 'organization_number' in df.columns:
@@ -162,6 +164,11 @@ def transform_roles(df):
         
     if 'id' in df.columns:
         df = df.drop_duplicates(subset=['id'])
+        
+    # CRITICAL: Drop 'NO_DATA' marker rows where role_type_code is null
+    if 'role_type_code' in df.columns:
+        df = df.dropna(subset=['role_type_code'])
+        
     for col in ['person_id', 'holding_company_id']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
@@ -198,6 +205,11 @@ def transform_company_industries(df):
     # Deduplicate company_industries to avoid unique constraint violations
     if 'company_id' in df.columns and 'industry_id' in df.columns:
         df = df.drop_duplicates(subset=['company_id', 'industry_id'])
+        
+    # CRITICAL: Filter out orphaned industry codes that don't exist in the dictionary
+    if 'industry_id' in df.columns and VALID_INDUSTRY_IDS:
+        df = df[df['industry_id'].isna() | df['industry_id'].isin(VALID_INDUSTRY_IDS)]
+        
     return df
 
 import_table('company_industries_all.csv', 'company_industries', transform_func=transform_company_industries)
