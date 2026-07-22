@@ -1,8 +1,11 @@
 import random
 from ninja_extra import api_controller, route
-from django.shortcuts import get_object_or_404
-from ninja import Schema
 from typing import Optional, Dict, Any, List
+from ninja import Schema
+from django.shortcuts import get_object_or_404
+import json
+from django.db import connection
+from django.http import Http404
 from .models import Company
 
 class SimilarCompanySchema(Schema):
@@ -62,19 +65,25 @@ class CompanyDetailSchema(Schema):
     industries: List[IndustrySchema]
     locations: List[LocationSchema]
 
-def generate_programmatic_summary(company: Company) -> str:
+def generate_programmatic_summary(data: dict) -> str:
     """Zero-cost AI logic that injects DB facts into randomly selected templates (Norwegian)."""
-    industry_obj = company.industries.filter(is_primary=True).first()
-    industry_name = industry_obj.industry.description.lower() if industry_obj else "ulike næringer"
+    industry_name = "ulike næringer"
+    for ind in (data.get('industries') or []):
+        if ind.get('is_primary'):
+            industry_name = ind.get('description', '').lower()
+            break
 
-    latest_financials = company.financials.order_by('-financial_year').first()
-    revenue = f"{latest_financials.operating_revenue:,} NOK" if latest_financials and latest_financials.operating_revenue else "ukjent omsetning"
+    revenue = "ukjent omsetning"
+    fins = data.get('financials') or []
+    if fins and fins[0].get('operating_revenue') is not None:
+        revenue = f"{fins[0]['operating_revenue']:,} NOK"
     
-    name = company.name
-    city = company.business_city or "Norge"
-    year = company.established_date.year if company.established_date else "nylig"
-    employees = company.employee_count
-    org_type = company.organization_type.description.lower() if company.organization_type else "virksomhet"
+    name = data.get('name', '')
+    city = data.get('business_city') or "Norge"
+    est_date = data.get('established_date')
+    year = est_date[:4] if est_date else "nylig"
+    employees = data.get('employee_count', 0)
+    org_type = (data.get('organization_type') or "virksomhet").lower()
 
     templates = [
         f"**{name}** er en aktiv {org_type} innenfor bransjen {industry_name}. Selskapet ble etablert i {year} med hovedkontor i {city}, og har i dag {employees} ansatte. I det siste årsregnskapet rapporterte de en driftsinntekt på {revenue}.",
@@ -82,7 +91,7 @@ def generate_programmatic_summary(company: Company) -> str:
         f"Med base i {city} er **{name}** en aktør i bransjen for {industry_name}. Selskapet er organisert som en {org_type}, ble stiftet i {year}, og har i dag {employees} ansatte. Selskapet rapporterte nylig {revenue} i driftsinntekter."
     ]
 
-    random.seed(company.organization_number) 
+    random.seed(data.get('organization_number')) 
     return random.choice(templates)
 
 
@@ -91,87 +100,108 @@ class CompanyController:
     
     @route.get('/{org_number}', response=CompanyDetailSchema)
     def get_company(self, org_number: str):
-        # Optimized prefetch to grab absolutely everything in one fast SQL query
-        company = get_object_or_404(
-            Company.objects.prefetch_related(
-                'financials', 
-                'roles__person', 
-                'roles__holding_company', 
-                'roles__role_type',
-                'industries__industry',
-                'locations'
-            ), 
-            organization_number=org_number
-        )
+        # OPTION B: ONE SINGLE QUERY FOR MAXIMUM SPEED
+        sql = """
+        SELECT 
+            c.organization_number,
+            c.name,
+            ot.description as organization_type,
+            c.established_date,
+            c.registered_date,
+            c.employee_count,
+            c.website,
+            c.business_address,
+            c.business_postal_code,
+            c.business_city,
+            c.business_country_code,
+            c.purpose,
+            c.is_vat_registered,
+            c.is_bankrupt,
+            c.is_under_liquidation,
+            (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'code', i.code,
+                    'description', i.description,
+                    'is_primary', ci.is_primary
+                ))
+                FROM company_industries ci
+                JOIN industries i ON ci.industry_id = i.code
+                WHERE ci.company_id = c.organization_number
+            ) as industries,
+            (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'financial_year', f.financial_year,
+                    'operating_revenue', f.operating_revenue,
+                    'operating_profit', f.operating_profit,
+                    'net_profit', f.net_profit,
+                    'total_equity', f.total_equity,
+                    'total_assets', f.total_assets
+                ) ORDER BY f.financial_year DESC)
+                FROM financial_statements f
+                WHERE f.company_id = c.organization_number
+            ) as financials,
+            (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'role_description', COALESCE(rt.description, 'Ukjent rolle'),
+                    'person_name', COALESCE(
+                        NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name, p.last_name)), ''), 
+                        hc.name
+                    )
+                ))
+                FROM company_roles cr
+                LEFT JOIN role_types rt ON cr.role_type_code = rt.code
+                LEFT JOIN people p ON cr.person_id = p.id
+                LEFT JOIN companies hc ON cr.holding_company_id = hc.organization_number
+                WHERE cr.company_id = c.organization_number AND cr.is_active = true
+            ) as roles,
+            (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'organization_number', loc.organization_number,
+                    'name', loc.name,
+                    'city', loc.city,
+                    'postal_code', loc.postal_code,
+                    'employee_count', loc.employee_count
+                ))
+                FROM company_locations loc
+                WHERE loc.company_id = c.organization_number
+            ) as locations
+        FROM companies c
+        LEFT JOIN organization_types ot ON c.organization_type_code = ot.code
+        WHERE c.organization_number = %s;
+        """
         
-        # 1. Map Industries
-        inds = [{"code": i.industry.code, "description": i.industry.description, "is_primary": i.is_primary} for i in company.industries.all()]
+        with connection.cursor() as cursor:
+            cursor.execute(sql, [org_number])
+            row = cursor.fetchone()
             
-        # 2. Map Financials (Sort by newest year first)
-        fins = []
-        for fin in sorted(company.financials.all(), key=lambda x: x.financial_year, reverse=True):
-            fins.append({
-                "financial_year": fin.financial_year,
-                "operating_revenue": fin.operating_revenue,
-                "operating_profit": fin.operating_profit,
-                "net_profit": fin.net_profit,
-                "total_equity": fin.total_equity,
-                "total_assets": fin.total_assets
-            })
+        if not row:
+            raise Http404("Company not found")
             
-        # 3. Map Roles (Board of Directors, CEO, etc.)
-        roles = []
-        for r in company.roles.filter(is_active=True):
-            person_name = None
-            if r.person:
-                parts = filter(None, [r.person.first_name, r.person.middle_name, r.person.last_name])
-                person_name = " ".join(parts)
-            elif r.holding_company:
-                person_name = r.holding_company.name
-                
-            roles.append({
-                "role_description": r.role_type.description if r.role_type else "Ukjent rolle",
-                "person_name": person_name
-            })
-            
-        # 4. Map Branch Locations
-        locs = []
-        for loc in company.locations.all():
-            locs.append({
-                "organization_number": loc.organization_number,
-                "name": loc.name,
-                "city": loc.city,
-                "postal_code": loc.postal_code,
-                "employee_count": loc.employee_count
-            })
+        # Map row tuple to dictionary keys based on SELECT order
+        cols = [
+            'organization_number', 'name', 'organization_type', 'established_date', 
+            'registered_date', 'employee_count', 'website', 'business_address', 
+            'business_postal_code', 'business_city', 'business_country_code', 'purpose', 
+            'is_vat_registered', 'is_bankrupt', 'is_under_liquidation', 
+            'industries', 'financials', 'roles', 'locations'
+        ]
+        data = dict(zip(cols, row))
         
-        return {
-            # Base info
-            "organization_number": company.organization_number,
-            "name": company.name,
-            "organization_type": company.organization_type.description if company.organization_type else None,
-            "established_date": str(company.established_date) if company.established_date else None,
-            "registered_date": str(company.registered_date) if company.registered_date else None,
-            "employee_count": company.employee_count,
-            "website": company.website,
-            "business_address": company.business_address,
-            "business_postal_code": company.business_postal_code,
-            "business_city": company.business_city,
-            "business_country_code": company.business_country_code,
-            "purpose": company.purpose,
-            "ai_summary": generate_programmatic_summary(company),
-            
-            # Trust & Warnings
-            "is_vat_registered": company.is_vat_registered,
-            "is_bankrupt": company.is_bankrupt,
-            "is_under_liquidation": company.is_under_liquidation,
-            
-            # Arrays
-            "financials": fins,
-            "roles": roles,
-            "industries": inds,
-            "locations": locs
-        }
+        # Parse JSON arrays (Postgres might return them as strings depending on psycopg2 version)
+        for key in ['industries', 'financials', 'roles', 'locations']:
+            val = data.get(key)
+            if isinstance(val, str):
+                data[key] = json.loads(val)
+            else:
+                data[key] = val or []
+        
+        # Format dates to string
+        if data['established_date']: data['established_date'] = str(data['established_date'])
+        if data['registered_date']: data['registered_date'] = str(data['registered_date'])
+        
+        data['ai_summary'] = generate_programmatic_summary(data)
+        
+        return data
 
     @route.get('/{org_number}/similar', response=List[SimilarCompanySchema])
     def get_similar_companies(self, org_number: str):

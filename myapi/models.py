@@ -164,6 +164,9 @@ class FinancialStatement(models.Model):
     class Meta:
         db_table = 'financial_statements'
         unique_together = ('company', 'financial_year')
+        indexes = [
+            models.Index(fields=['financial_year', 'operating_revenue']),
+        ]
 
 class CompanyRole(models.Model):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='roles')
