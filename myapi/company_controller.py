@@ -231,3 +231,4 @@ class CompanyController:
                     break
                     
         return similar
+
