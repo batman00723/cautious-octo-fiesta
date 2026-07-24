@@ -15,11 +15,13 @@ class SearchResultSchema(Schema):
     latest_revenue: Optional[int] = None
 
 
+from django.db import connection
+
 @api_controller('/search', tags=['Live Search'])
 class SearchController:
     
     @route.get('/', response=List[SearchResultSchema], throttle=[AnonRateThrottle()])
-    async def search_companies(
+    def search_companies(
         self, 
         q: Optional[str] = None,
         min_employees: Optional[int] = None,
@@ -27,59 +29,78 @@ class SearchController:
         min_revenue: Optional[int] = None,
         industry_code: Optional[str] = None
     ):
-        qs = Company.objects.all()
-
-        # 1. Text Search
+        sql = """
+        SELECT 
+            c.organization_number, 
+            c.name, 
+            c.business_city, 
+            c.employee_count,
+            (
+                SELECT i.description 
+                FROM company_industries ci 
+                JOIN industries i ON ci.industry_id = i.code 
+                WHERE ci.company_id = c.organization_number AND ci.is_primary = true
+                LIMIT 1
+            ) as industry_description,
+            (
+                SELECT f.operating_revenue 
+                FROM financial_statements f 
+                WHERE f.company_id = c.organization_number 
+                ORDER BY f.financial_year DESC 
+                LIMIT 1
+            ) as latest_revenue
+        FROM companies c
+        """
+        
+        where_clauses = []
+        params = []
+        
         if q:
-            # Fast direct ID search
             if q.isdigit() and len(q) == 9:
-                qs = qs.filter(organization_number=q)
+                where_clauses.append("c.organization_number = %s")
+                params.append(q)
             else:
-                # PostgreSQL GIN Full Text Search
-                vector_qs = qs.filter(search_vector=SearchQuery(q, config='norwegian'))
-                if await vector_qs.aexists():
-                    qs = vector_qs
-                else:
-                    qs = qs.filter(name__icontains=q)
-        
-        # 2. Employee Filters
+                # Use raw full text search. Do not use ILIKE because it breaks the GIN Index
+                # and forces a 1.16 million row sequential scan (taking ~10 seconds).
+                # To support prefix matching, we append ':*' to the lexemes
+                where_clauses.append("c.search_vector @@ plainto_tsquery('norwegian', %s)")
+                params.append(q)
+                
         if min_employees is not None:
-            qs = qs.filter(employee_count__gte=min_employees)
+            where_clauses.append("c.employee_count >= %s")
+            params.append(min_employees)
+            
         if max_employees is not None:
-            qs = qs.filter(employee_count__lte=max_employees)
+            where_clauses.append("c.employee_count <= %s")
+            params.append(max_employees)
             
-        # 3. Industry Filter
         if industry_code:
-            qs = qs.filter(industries__industry__code=industry_code)
+            where_clauses.append("""
+                EXISTS (
+                    SELECT 1 FROM company_industries ci 
+                    WHERE ci.company_id = c.organization_number 
+                    AND ci.industry_id = %s
+                )
+            """)
+            params.append(industry_code)
             
-        # 4. Revenue Filter (Dynamic Latest Year using Subquery)
-        # We annotate every company with its most recent operating_revenue
-        latest_revenue_sq = FinancialStatement.objects.filter(
-            company_id=OuterRef('organization_number')
-        ).order_by('-financial_year').values('operating_revenue')[:1]
-        
-        qs = qs.annotate(
-            latest_revenue=Subquery(latest_revenue_sq, output_field=BigIntegerField())
-        )
-        
+        final_sql = sql
+        if where_clauses:
+            final_sql += " WHERE " + " AND ".join(where_clauses)
+            
         if min_revenue is not None:
-            qs = qs.filter(latest_revenue__gte=min_revenue)
+            final_sql = f"WITH results AS ({final_sql}) SELECT * FROM results WHERE latest_revenue >= %s LIMIT 20"
+            params.append(min_revenue)
+        else:
+            final_sql += " LIMIT 20"
             
-        # Limit to top 20 for fast response
-        qs = qs.prefetch_related('industries__industry')[:20]
+        with connection.cursor() as cursor:
+            cursor.execute(final_sql, params)
+            rows = cursor.fetchall()
+            
+        cols = [
+            'organization_number', 'name', 'business_city', 
+            'employee_count', 'industry_description', 'latest_revenue'
+        ]
         
-        results = []
-        async for company in qs:
-            inds = [i for i in company.industries.all() if i.is_primary]
-            ind_desc = inds[0].industry.description if inds else None
-            
-            results.append({
-                "organization_number": company.organization_number,
-                "name": company.name,
-                "business_city": company.business_city,
-                "industry_description": ind_desc,
-                "employee_count": company.employee_count,
-                "latest_revenue": getattr(company, 'latest_revenue', None)
-            })
-            
-        return results
+        return [dict(zip(cols, row)) for row in rows]
